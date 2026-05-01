@@ -2,13 +2,29 @@ import asyncio
 import os
 import sys
 
-import humanfriendly
-
 from .dialog import dialog_checklist, dialog_menu, dialog_msgbox, dialog_password, dialog_yesno
 from .disks import Disk, list_disks
 from .exception import InstallError
 from .install import install
 from .serial import serial_sql
+
+_BINARY_SIZE_UNITS = ("KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB")
+
+
+def format_size_binary(num_bytes):
+    if num_bytes == 0:
+        return "0 bytes"
+    if num_bytes == 1:
+        return "1 byte"
+    if num_bytes < 1024:
+        return f"{num_bytes} bytes"
+    size = num_bytes / 1024
+    idx = 0
+    while size >= 1024 and idx < len(_BINARY_SIZE_UNITS) - 1:
+        size /= 1024
+        idx += 1
+    value = f"{size:.2f}".rstrip("0").rstrip(".")
+    return f"{value} {_BINARY_SIZE_UNITS[idx]}"
 
 
 class InstallerMenu:
@@ -55,7 +71,7 @@ class InstallerMenu:
                         disk.model[:15].ljust(15, " "),
                         disk.label[:15].ljust(15, " "),
                         "--",
-                        humanfriendly.format_size(disk.size, binary=True)
+                        format_size_binary(disk.size)
                     ])
                     for disk in disks
                 }
