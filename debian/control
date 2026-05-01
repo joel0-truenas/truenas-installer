@@ -9,10 +9,9 @@ Build-Depends: debhelper-compat (= 12),
                python3-ixhardware,
                python3-jsonschema,
                python3-licenselib,
-               python3-humanfriendly,
-               python3-pyroute2,
                python3-setuptools,
-               python3-truenas-connect-utils
+               python3-truenas-connect-utils,
+               python3-truenas-pynetif
 Standards-Version: 4.4.0
 
 Package: python3-truenas-installer
@@ -29,9 +28,8 @@ Depends: ${misc:Depends},
          python3-ixhardware,
          python3-jsonschema,
          python3-licenselib,
-         python3-humanfriendly,
-         python3-pyroute2,
          python3-truenas-connect-utils,
+         python3-truenas-pynetif,
          setserial,
          squashfs-tools,
          util-linux

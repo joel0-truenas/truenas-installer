@@ -1,8 +1,10 @@
-from dataclasses import dataclass
+import dataclasses
 import ipaddress
 import logging
+import socket
 
-from pyroute2 import IPRoute, NetlinkDumpInterrupted
+from truenas_pynetif.address import get_addresses, get_links, netlink_route
+from truenas_pynetif.netlink import DumpInterrupted
 
 logger = logging.getLogger(__name__)
 
@@ -10,7 +12,7 @@ logger = logging.getLogger(__name__)
 __all__ = ["list_network_interfaces", "get_available_ip_addresses"]
 
 
-@dataclass
+@dataclasses.dataclass
 class NetworkInterface:
     name: str
 
@@ -19,50 +21,15 @@ async def list_network_interfaces():
     max_retries = 3
     for attempt in range(1, max_retries + 1):
         try:
-            with IPRoute() as ipr:
-                interfaces = [NetworkInterface(dev.get_attr("IFLA_IFNAME")) for dev in ipr.get_links()]
-        except NetlinkDumpInterrupted:
+            with netlink_route() as sock:
+                links = get_links(sock)
+            break
+        except DumpInterrupted:
             if attempt < max_retries:
-                # When the kernel is producing a dump of a kernel structure
-                # over multiple netlink messages, and the structure changes
-                # mid-way, NLM_F_DUMP_INTR is added to the header flags.
-                # This an indication that the requested dump contains
-                # inconsistent data and must be re-requested. See function
-                # nl_dump_check_consistent() in include/net/netlink.h. The
-                # pyroute2 library raises this specific exception for this
-                # scenario, so we'll try again (up to a max of 3 times).
                 continue
-            else:
-                raise
+            raise
 
-    return [
-        interface for interface in interfaces
-        if interface.name not in ["lo"]
-    ]
-
-
-def _is_valid_ip_for_connection(ip_obj):
-    """
-    Check if an IP address is valid for external connections.
-    Excludes loopback, link-local, wildcard, and multicast addresses.
-    """
-    # Skip loopback addresses
-    if ip_obj.is_loopback:
-        return False
-
-    # Skip link-local addresses
-    if ip_obj.is_link_local:
-        return False
-
-    # Skip wildcard addresses
-    if ip_obj == ipaddress.ip_address("0.0.0.0") or ip_obj == ipaddress.ip_address("::"):
-        return False
-
-    # Skip multicast addresses
-    if ip_obj.is_multicast:
-        return False
-
-    return True
+    return [NetworkInterface(name) for name in links if name != "lo"]
 
 
 async def _get_ip_addresses_with_filter(interface_filter=None):
@@ -80,68 +47,53 @@ async def _get_ip_addresses_with_filter(interface_filter=None):
     max_retries = 3
     for attempt in range(1, max_retries + 1):
         try:
-            with IPRoute() as ipr:
-                # Get all addresses
-                addresses = ipr.get_addr()
-
-                for addr in addresses:
-                    # Get the IP address
-                    ip_str = addr.get_attr("IFA_ADDRESS")
-                    if not ip_str:
-                        continue
-
-                    # Get the interface index and name
-                    if_index = addr["index"]
-                    try:
-                        link = ipr.get_links(if_index)[0]
-                        if_name = link.get_attr("IFLA_IFNAME")
-
-                        # Apply interface filter
-                        if interface_filter is None:
-                            # Skip loopback for "all interfaces" mode
-                            if if_name == "lo":
-                                continue
-                        else:
-                            # Check if interface is in the filter list
-                            if if_name not in interface_filter:
-                                continue
-                    except (IndexError, KeyError):
-                        continue
-
-                    try:
-                        ip_obj = ipaddress.ip_address(ip_str)
-
-                        # Check if IP is valid for connections
-                        if not _is_valid_ip_for_connection(ip_obj):
-                            continue
-
-                        # Add to appropriate list
-                        if isinstance(ip_obj, ipaddress.IPv4Address):
-                            if ip_str not in result["ipv4"]:
-                                result["ipv4"].append(ip_str)
-                        elif isinstance(ip_obj, ipaddress.IPv6Address):
-                            if ip_str not in result["ipv6"]:
-                                result["ipv6"].append(ip_str)
-
-                    except ValueError:
-                        # Invalid IP address, skip
-                        continue
-
-            # Success, break out of retry loop
+            with netlink_route() as sock:
+                addresses = get_addresses(sock)
             break
-
-        except NetlinkDumpInterrupted:
+        except DumpInterrupted:
             if attempt < max_retries:
                 continue
-            else:
-                logger.error("Failed to get IP addresses after %d retries due to NetlinkDumpInterrupted", max_retries)
-                return result
+            logger.error("Failed to get IP addresses after %d retries due to DumpInterrupted", max_retries)
+            return result
         except Exception as e:
             if interface_filter:
                 logger.error("Error getting IP addresses for interfaces %s: %s", interface_filter, e, exc_info=True)
             else:
                 logger.error("Error getting IP addresses: %s", e, exc_info=True)
             return result
+
+    all_ipv4 = ipaddress.ip_address("0.0.0.0")
+    all_ipv6 = ipaddress.ip_address("::")
+    for addr in addresses:
+        if not addr.ifname:
+            continue
+
+        if interface_filter is None:
+            if addr.ifname == "lo":
+                continue
+        elif addr.ifname not in interface_filter:
+            continue
+
+        try:
+            ip_obj = ipaddress.ip_address(addr.address)
+        except ValueError:
+            continue
+
+        if any(
+            (
+                (ip_obj == all_ipv4),  # 0.0.0.0 invalid
+                (ip_obj == all_ipv6),  # :: invalid
+                (ip_obj.is_loopback),
+                (ip_obj.is_link_local),
+                (ip_obj.is_multicast),
+            )
+        ):
+            if addr.family == socket.AF_INET:
+                if addr.address not in result["ipv4"]:
+                    result["ipv4"].append(addr.address)
+            if addr.family == socket.AF_INET6:
+                if addr.address not in result["ipv6"]:
+                    result["ipv6"].append(addr.address)
 
     return result
 
