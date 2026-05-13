@@ -4,7 +4,7 @@ import json
 
 from aiohttp import web
 
-from ixhardware import get_chassis_hardware, parse_dmi
+from truenas_pydmi.reader import read_dmi
 
 from .installer import Installer
 from .installer_menu import InstallerMenu
@@ -28,10 +28,9 @@ def main():
     except Exception:
         pass
 
-    dmi = parse_dmi()
-    tn_model = get_chassis_hardware(dmi)
+    tn_model = read_dmi().tn_model
 
-    installer = Installer(version, dmi, vendor, tn_model)
+    installer = Installer(version, vendor, tn_model)
 
     if args.doc:
         generate_api_doc()
